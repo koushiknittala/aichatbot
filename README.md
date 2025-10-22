@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # MSME ONE Chatbot
 
 A modern chatbot application for MSME ONE with document upload and RAG (Retrieval-Augmented Generation) capabilities.
@@ -198,3 +199,6 @@ The application will start on `http://localhost:5000` with debug mode enabled.
 ## License
 
 This project is licensed under the MIT License.
+=======
+# aichatbot
+>>>>>>> eb580296c5807ef61931f51fb3e2170c4da38a14
