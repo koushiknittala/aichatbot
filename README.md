@@ -196,9 +196,6 @@ The application will start on `http://localhost:5000` with debug mode enabled.
 2. **Multiple Documents**: Each document is processed independently
 3. **Memory Usage**: Embeddings are stored in memory for fast retrieval
 
-## License
 
-This project is licensed under the MIT License.
-=======
 # aichatbot
->>>>>>> eb580296c5807ef61931f51fb3e2170c4da38a14
+
