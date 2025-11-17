@@ -3,4 +3,6 @@ Flask-CORS==4.0.0
 PyPDF2==3.0.1
 requests==2.31.0
 Werkzeug==2.3.7
-openai==0.28.1
+PyJWT==2.8.0
+openai-whisper==20231117
+deep-translator==1.11.4
