@@ -6,6 +6,7 @@ import requests
 import json
 import PyPDF2
 from werkzeug.utils import secure_filename
+import openai
 import whisper
 from deep_translator import GoogleTranslator
 import jwt
@@ -96,10 +97,10 @@ def load_admin_settings():
                 return json.load(f)
         except:
             pass
-    # Default settings - using Ollama models
+    # Default settings
     default_settings = {
-        'default_model': OLLAMA_MODEL,
-        'available_models': ['llama3.2', 'llama3', 'llama2', 'mistral', 'phi']  # Lightweight Ollama models
+        'default_model': 'gpt-3.5-turbo',
+        'available_models': ['gpt-3.5-turbo', 'gpt-4']
     }
     save_admin_settings(default_settings)
     return default_settings
@@ -151,16 +152,16 @@ def get_whisper_model():
         print("Whisper model loaded successfully!")
     return whisper_model
 
-# AI Configuration - Using Ollama (free, local LLM)
-# Ollama runs locally, no API key needed
-# Default model: llama2, llama3, mistral, or phi (lightweight options)
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")  # Best model: llama3.2 (recommended)
+# AI Configuration - Using OpenAI API for intelligent responses
+# Prefer a hardcoded key if provided, else fall back to environment variable
+HARDCODED_OPENAI_API_KEY = " "# <--- OPTIONAL: put your OpenAI API key here to skip env setup
 
-print(f"Ollama Configuration:")
-print(f"  Base URL: {OLLAMA_BASE_URL}")
-print(f"  Model: {OLLAMA_MODEL}")
-print(f"  Note: Make sure Ollama is running locally (download from https://ollama.ai)")
+openai.api_key = HARDCODED_OPENAI_API_KEY or os.environ.get("OPENAI_API_KEY")
+
+if not openai.api_key:
+    # Helpful console guidance if key is missing; the app will still run but AI calls may return fallback responses
+    print("WARNING: No OpenAI API key configured. Set HARDCODED_OPENAI_API_KEY in app.py or set OPENAI_API_KEY env var.")
+    print("Set it in PowerShell with: $env:OPENAI_API_KEY = 'your_key_here'")
 
 # Global variables to store document data
 documents = []
@@ -192,11 +193,11 @@ def chunk_text(text, chunk_size=500, overlap=50):
     
     return chunks
 
-def get_ai_response(query, document_context="", agent_id="default", model=None):
-    """Get AI-powered response using Ollama (free, local LLM)"""
-    # Use provided model or default from admin settings or Ollama default
+def get_ai_response(query, document_context="", agent_id="agent1", model=None):
+    """Get AI-powered response using OpenAI with agent-specific context"""
+    # Use provided model or default from admin settings
     if not model:
-        model = admin_settings.get('default_model', OLLAMA_MODEL)
+        model = admin_settings.get('default_model', 'gpt-3.5-turbo')
     
     try:
         # Load agent-specific documents if available
@@ -219,48 +220,42 @@ def get_ai_response(query, document_context="", agent_id="default", model=None):
         
         # Create a comprehensive prompt
         system_prompt = """You are a helpful MSME (Micro, Small and Medium Enterprises) support assistant. 
-Provide accurate, concise, and helpful responses about business registration, compliance, and MSME-related queries.
-If document context is provided, use it to give specific answers. Be brief but comprehensive."""
+        Provide accurate, concise, and helpful responses about business registration, compliance, and MSME-related queries.
+        If document context is provided, use it to give specific answers. Be brief but comprehensive."""
         
-        user_prompt = f"""Query: {query}
-
-{f"Document Context: {full_context}" if full_context else ""}
-
-Please provide a helpful, accurate response. If the query is about uploaded documents, use the context provided.
-If it's a general MSME question, provide relevant information about business registration, compliance, or MSME services."""
+        user_prompt = f"""
+        Query: {query}
         
-        # Use Ollama API (free, local)
-        ollama_url = f"{OLLAMA_BASE_URL}/api/chat"
+        {f"Document Context: {full_context}" if full_context else ""}
         
-        payload = {
-            "model": model,
-            "messages": [
+        Please provide a helpful, accurate response. If the query is about uploaded documents, use the context provided.
+        If it's a general MSME question, provide relevant information about business registration, compliance, or MSME services.
+        """
+        
+        # Use the newer OpenAI API format
+        client = openai.OpenAI(api_key=openai.api_key)
+        
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            "stream": False,
-            "options": {
-                "temperature": 0.7,
-                "num_predict": 500  # Max tokens
-            }
-        }
+            max_tokens=500,
+            temperature=0.7
+        )
         
-        response = requests.post(ollama_url, json=payload, timeout=60)
-        response.raise_for_status()
+        return response.choices[0].message.content.strip()
         
-        result = response.json()
-        return result.get('message', {}).get('content', '').strip()
-        
-    except requests.exceptions.ConnectionError:
-        print("Ollama Connection Error: Make sure Ollama is running locally")
-        return get_simple_response(query, document_context)
-    except requests.exceptions.Timeout:
-        print("Ollama Timeout: Request took too long")
-        return get_simple_response(query, document_context)
     except Exception as e:
-        print(f"Ollama API Error: {e}")
-        # Return fallback response
-        return get_simple_response(query, document_context)
+        print(f"AI API Error: {e}")
+        # Return a fallback response instead of the error message
+        if "rate limit" in str(e).lower():
+            return "I'm currently experiencing high demand. Please try again in a moment."
+        elif "authentication" in str(e).lower() or "api key" in str(e).lower():
+            return "There's an issue with the AI service configuration. Please check the API key."
+        else:
+            return "I'm here to help with MSME-related questions! What would you like to know about business registration, compliance, or MSME services?"
 
 def process_document(file_path, filename):
     """Process uploaded document for AI analysis"""
@@ -302,16 +297,6 @@ def get_document_context():
 @app.route('/test')
 def test():
     return send_from_directory('.', 'test.html')
-
-@app.route('/health')
-def health():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'ok',
-        'build_exists': os.path.exists('build/index.html'),
-        'static_js_exists': os.path.exists('build/static/js/main.7da40291.js'),
-        'static_css_exists': os.path.exists('build/static/css/main.49c2fa50.css')
-    })
 
 @app.route('/static/css/<path:filename>')
 def static_css(filename):
@@ -420,7 +405,7 @@ def chat():
     """Handle chat messages with AI"""
     data = request.get_json()
     message = data.get('message', '').strip()
-    agent_id = data.get('agent_id', 'default')  # Default to default
+    agent_id = data.get('agent_id', 'agent1')  # Default to agent1
     model = data.get('model')  # User selected model (optional)
     session_id = data.get('session_id')  # Chat session ID
     
@@ -432,7 +417,7 @@ def chat():
         session_id = str(uuid.uuid4())
     
     # Use model from request or default from admin settings
-    selected_model = model or admin_settings.get('default_model', OLLAMA_MODEL)
+    selected_model = model or admin_settings.get('default_model', 'gpt-3.5-turbo')
     
     # Get document context if available (user uploads)
     document_context = get_document_context()
@@ -446,14 +431,13 @@ def chat():
     
     # Store chat in history
     chat_logs = load_chat_logs()
-    message_timestamp = datetime.utcnow().isoformat()
     chat_entry = {
         'session_id': session_id,
         'user_message': message,
         'bot_response': ai_response,
         'agent_id': agent_id,
         'model': selected_model,
-        'timestamp': message_timestamp,
+        'timestamp': datetime.utcnow().isoformat(),
         'feedback': None  # Will be updated when user provides feedback
     }
     
@@ -482,7 +466,7 @@ def chat():
         'agent_id': agent_id,
         'session_id': session_id,
         'model': selected_model,
-        'message_timestamp': message_timestamp
+        'message_timestamp': chat_entry.get('timestamp')
     })
 
 def get_simple_response(message, document_context=""):
@@ -614,107 +598,60 @@ def get_admin_data():
 @app.route('/api/admin/upload', methods=['POST'])
 @verify_token
 def admin_upload():
-    """Admin document upload endpoint - supports single file or multiple files"""
+    """Admin document upload endpoint"""
     global agents_data
     
-    # Check if multiple files are being uploaded
-    uploaded_files = request.files.getlist('files')
-    if not uploaded_files or len(uploaded_files) == 0:
-        # Fallback to single file upload for backward compatibility
-        uploaded_file = request.files.get('file')
-        if uploaded_file:
-            uploaded_files = [uploaded_file]
-    
-    if not uploaded_files or len(uploaded_files) == 0:
-        return jsonify({'error': 'No files selected'}), 400
-    
-    agent_id = request.form.get('agent_id', 'default')
+    uploaded_file = request.files.get('file')
+    agent_id = request.form.get('agent_id', 'agent1')
     description = request.form.get('description', '').strip()
-    
-    # For folder uploads, description is optional (can be empty)
-    # For single file uploads, description is required
-    if len(uploaded_files) == 1 and not description:
+
+    if uploaded_file is None or uploaded_file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+
+    if not allowed_file(uploaded_file.filename):
+        return jsonify({'error': 'Invalid file type. Only PDF files are allowed.'}), 400
+
+    if not description:
         return jsonify({'error': 'Description is required for uploaded documents.'}), 400
 
-    uploaded_documents = []
-    errors = []
+    filename = secure_filename(uploaded_file.filename)
+    file_id = str(uuid.uuid4())
+    file_path = os.path.join(app.config['ADMIN_UPLOAD_FOLDER'], f"{file_id}_{filename}")
+    uploaded_file.save(file_path)
 
-    # Process each file
-    for uploaded_file in uploaded_files:
-        if uploaded_file.filename == '':
-            continue
-            
-        if not allowed_file(uploaded_file.filename):
-            errors.append(f'{uploaded_file.filename}: Invalid file type. Only PDF files are allowed.')
-            continue
+    # Extract text from PDF
+    text = extract_text_from_pdf(file_path)
+    if not text.strip():
+        return jsonify({'error': 'No text could be extracted from the PDF'}), 400
 
-        try:
-            filename = secure_filename(uploaded_file.filename)
-            file_id = str(uuid.uuid4())
-            file_path = os.path.join(app.config['ADMIN_UPLOAD_FOLDER'], f"{file_id}_{filename}")
-            uploaded_file.save(file_path)
+    # Store document data
+    doc_data = {
+        'id': file_id,
+        'filename': filename,
+        'text': text,
+        'uploaded_at': datetime.utcnow().isoformat(),
+        'description': description
+    }
 
-            # Extract text from PDF
-            text = extract_text_from_pdf(file_path)
-            if not text.strip():
-                errors.append(f'{filename}: No text could be extracted from the PDF')
-                try:
-                    os.remove(file_path)
-                except:
-                    pass
-                continue
+    # Add to agent's documents
+    if 'documents' not in agents_data:
+        agents_data['documents'] = {}
+    if agent_id not in agents_data['documents']:
+        agents_data['documents'][agent_id] = []
 
-            # Store document data
-            # Use provided description or filename as description for folder uploads
-            doc_description = description if description else f"Uploaded: {filename}"
-            
-            doc_data = {
-                'id': file_id,
-                'filename': filename,
-                'text': text,
-                'uploaded_at': datetime.utcnow().isoformat(),
-                'description': doc_description
-            }
+    agents_data['documents'][agent_id].append(doc_data)
 
-            # Add to agent's documents
-            if 'documents' not in agents_data:
-                agents_data['documents'] = {}
-            if agent_id not in agents_data['documents']:
-                agents_data['documents'][agent_id] = []
+    # Save agents data
+    save_agents_data(agents_data)
 
-            agents_data['documents'][agent_id].append(doc_data)
-            uploaded_documents.append({**doc_data, 'agent_id': agent_id})
-            
-        except Exception as e:
-            errors.append(f'{uploaded_file.filename}: {str(e)}')
-            continue
+    response_doc = {**doc_data, 'agent_id': agent_id}
 
-    # Save agents data if any documents were uploaded
-    if uploaded_documents:
-        save_agents_data(agents_data)
-
-    if errors and not uploaded_documents:
-        # All files failed
-        return jsonify({
-            'success': False,
-            'error': 'All files failed to upload',
-            'errors': errors
-        }), 400
-    elif errors:
-        # Some files succeeded, some failed
-        return jsonify({
-            'success': True,
-            'documents': uploaded_documents,
-            'message': f'{len(uploaded_documents)} file(s) uploaded successfully',
-            'warnings': errors
-        })
-    else:
-        # All files succeeded
-        return jsonify({
-            'success': True,
-            'documents': uploaded_documents,
-            'message': f'{len(uploaded_documents)} file(s) uploaded successfully'
-        })
+    return jsonify({
+        'success': True,
+        'document': response_doc,
+        'documents': [response_doc],
+        'message': 'Document uploaded successfully'
+    })
 
 @app.route('/api/admin/train', methods=['POST'])
 @verify_token
@@ -723,7 +660,7 @@ def admin_train():
     global agents_data
     
     data = request.get_json()
-    agent_id = data.get('agent_id', 'default')
+    agent_id = data.get('agent_id', 'agent1')
     
     # Check if agent has documents
     agent_docs = agents_data.get('documents', {}).get(agent_id, [])
@@ -755,7 +692,7 @@ def admin_delete_document(doc_id):
     
     # Get agent_id from request JSON or query parameter
     data = request.get_json(silent=True) or {}
-    agent_id = data.get('agent_id') or request.args.get('agent_id', 'default')
+    agent_id = data.get('agent_id') or request.args.get('agent_id', 'agent1')
     
     # Remove document from agent's documents
     if agent_id in agents_data.get('documents', {}):
@@ -806,29 +743,12 @@ def get_agents():
 # Get available models (public endpoint)
 @app.route('/api/models', methods=['GET'])
 def get_models():
-    """Get list of available AI models - automatically fetches from Ollama"""
+    """Get list of available AI models"""
     global admin_settings
     admin_settings = load_admin_settings()
-    
-    # Try to get installed models from Ollama automatically
-    installed_models = []
-    try:
-        response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            installed_models = [model['name'] for model in data.get('models', [])]
-    except:
-        pass  # If Ollama not available, use configured models
-    
-    # Use installed models if available, otherwise use configured models
-    if installed_models:
-        available_models = installed_models
-    else:
-        available_models = admin_settings.get('available_models', ['llama3.2', 'llama3', 'llama2', 'mistral', 'phi'])
-    
     return jsonify({
-        'available_models': available_models,
-        'default_model': admin_settings.get('default_model', OLLAMA_MODEL)
+        'available_models': admin_settings.get('available_models', ['gpt-3.5-turbo', 'gpt-4']),
+        'default_model': admin_settings.get('default_model', 'gpt-3.5-turbo')
     })
 
 # Submit feedback for a chat message
@@ -927,42 +847,24 @@ def get_admin_settings():
 @app.route('/api/admin/settings', methods=['POST'])
 @verify_token
 def update_admin_settings():
-    """Update admin settings (default model and available models)"""
+    """Update admin settings (default model)"""
     global admin_settings
     data = request.get_json()
     
-    # Update default model
     if 'default_model' in data:
-        # Get current available models (from Ollama or config)
-        try:
-            response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
-            if response.status_code == 200:
-                ollama_data = response.json()
-                installed_models = [model['name'] for model in ollama_data.get('models', [])]
-                available_models = installed_models if installed_models else admin_settings.get('available_models', ['llama3.2', 'llama3', 'llama2', 'mistral', 'phi'])
-            else:
-                available_models = admin_settings.get('available_models', ['llama3.2', 'llama3', 'llama2', 'mistral', 'phi'])
-        except:
-            available_models = admin_settings.get('available_models', ['llama3.2', 'llama3', 'llama2', 'mistral', 'phi'])
-        
-        # Allow any model name (user might have custom models)
-        # Just validate it's not empty
-        if data['default_model'] and data['default_model'].strip():
-            admin_settings['default_model'] = data['default_model'].strip()
+        available_models = admin_settings.get('available_models', ['gpt-3.5-turbo', 'gpt-4'])
+        if data['default_model'] in available_models:
+            admin_settings['default_model'] = data['default_model']
             save_admin_settings(admin_settings)
+            return jsonify({
+                'success': True,
+                'message': 'Settings updated successfully',
+                'settings': admin_settings
+            })
         else:
-            return jsonify({'error': 'Invalid model name'}), 400
+            return jsonify({'error': 'Invalid model'}), 400
     
-    # Update available models list (allow custom models)
-    if 'available_models' in data and isinstance(data['available_models'], list):
-        admin_settings['available_models'] = data['available_models']
-        save_admin_settings(admin_settings)
-    
-    return jsonify({
-        'success': True,
-        'message': 'Settings updated successfully',
-        'settings': admin_settings
-    })
+    return jsonify({'error': 'Invalid settings data'}), 400
 
 # Catch-all route for React Router - must be LAST after all API routes
 @app.route('/', defaults={'path': ''})
@@ -973,7 +875,7 @@ def serve_react_app(path):
     if path.startswith('api/'):
         return jsonify({'error': 'Not found'}), 404
     
-    # Don't interfere with static files (handled by serve_static above)
+    # Don't interfere with static files
     if path.startswith('static/'):
         return jsonify({'error': 'Not found'}), 404
     

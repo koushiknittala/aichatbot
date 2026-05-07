@@ -185,8 +185,8 @@ All admin routes require a `Bearer <token>` header issued by `/api/admin/login`.
 ├── build/                # Production React bundle served by Flask
 ├── uploads/              # User PDFs uploaded from chat UI
 ├── admin_uploads/        # Admin-managed knowledge base documents
-├── knowledge_base/       # JSON cache of parsed PDFs
-├── agent_data/           # Agents, chat logs, admin settings (JSON files)
+├── knowledge_base/       # cache of parsed PDFs
+├── agent_data/           # Agents, chat logs, admin settings
 ├── audio_temp/           # Temporary audio uploads for Whisper
 ├── start.bat             # Convenience launcher on Windows
 └── download_model.bat    # Script to pull Ollama models
