@@ -15,7 +15,8 @@ import {
 import Header from './Header';
 import './UserLogs.css';
 
-const API_BASE_URL = 'http://localhost:5000/api';
+// Use same-origin API in deployments; override for local dev if needed.
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '/api';
 
 function UserLogs() {
   const [sessions, setSessions] = useState([]);
